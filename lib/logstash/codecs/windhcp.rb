@@ -4,20 +4,18 @@ require "logstash/codecs/base"
 
 class LogStash::Codecs::Windhcp < LogStash::Codecs::Base
   config_name "windhcp"
- 
-  HEADER_FIELDS = ["ID","Date","Time","Description","IP Address","HostName","MAC Address","UserName",
+  # Array contenente i nomi dei campi che compongono il log DHCP
+  LOG_FIELDS = ["ID","Date","Time","Description","IP Address","HostName","MAC Address","UserName",
 	"TransactionID","QResult","ProbationTime","CorrelationID","Dhcid","VendorClass(Hex)",
 	"VendorClass(ASCII)","UserClass(HEX)","UserClass(ASCII)","RelayAgentInformation",
 	"DnsRegError"]    
 
-  # Queste espressioni servono per individuare l'header. 
-  HEADER_PATTERN = /(?:\\\||\\\\|[^|])*?/
+  # Regexp per individuare i diversi campi del log indicando il separatore: ',' 
+  LOG_PATTERN = /(?:\\\||\\\\|[^|])*?/
+  LOG_SCANNER = /(#{LOG_PATTERN})#{Regexp.quote(',')}/
   
-  # Per trovare i campi dell'header indico il separatore: '|'
-  HEADER_SCANNER = /(#{HEADER_PATTERN})#{Regexp.quote(',')}/
-  
-  # Cache of a gsub pattern that matches a backslash-escaped backslash or backslash-escaped pipe, _capturing_ the escaped character
-  HEADER_ESCAPE_CAPTURE = /\\([\\|])/
+  # Regexp per trovare escape character (backslash e pipe)
+  ESCAPE_CAPTURE = /\\([\\|])/
 
   public
   def initialize(params={})
@@ -27,11 +25,10 @@ class LogStash::Codecs::Windhcp < LogStash::Codecs::Base
     @utf8_charset.logger = self.logger
   end
    
-  # Definiamo il parser vero e proprio
+  # Definiamo il parser
   def decode(data, &block)
     # Creiamo l'evento
     event = LogStash::Event.new
-
     # Usiamo per il log la codifica UTF-8
     @utf8_charset.convert(data)
     # Se l'encoding non ha avuto successo non andiamo avanti nel parsing, perchè nascerebbero errori
@@ -45,24 +42,27 @@ class LogStash::Codecs::Windhcp < LogStash::Codecs::Base
     # Il log da parsare viene inserito in una variabile dal nome unprocessed_data
     unprocessed_data = data
 	 
-    # Scopo di questo ciclo è ricavare le diverse parti dell'header
-    HEADER_FIELDS.each do |field_name|
-      # Scansioniamo l'header fino al prossimo elemento di separazione (',')
-      match_data = HEADER_SCANNER.match(unprocessed_data)
-      # Se non c'è match allora il campo manca e andiamo avanti
+    # Con il seguente ciclo ricaviamo le diverse parti del log
+    LOG_FIELDS.each do |field_name|
+      # Scansioniamo il log fino al prossimo elemento di separazione (',')
+      match_data = LOG_SCANNER.match(unprocessed_data)
+      # Se il match non da risultato allora andiamo avanti
       break if match_data.nil?
-      # Il valore matchato va nella seguente variabile
+      # Il valore trovatoo va nella seguente variabile
       escaped_field_value = match_data[1]
 
       # La prossima parte di codice viene saltata se la condizione è verificata
       next if escaped_field_value.nil?
-      # Controlliamo la presenze di sequenze di escape e rimuoviamo per evitare ambiguità
-      unescaped_field_value = escaped_field_value.gsub(HEADER_ESCAPE_CAPTURE, '\1')
-      # A questo punto nell'evento settiamo la coppia header-valore trovata
+      # Controlliamo la presenza di escape sequence e rimuoviamo per evitare ambiguità
+      unescaped_field_value = escaped_field_value.gsub(ESCAPE_CAPTURE, '\1')
+      # Nell'evento settiamo la coppia campo-valore trovata
       event.set(field_name, unescaped_field_value)
       # Conserviamo in unprocessed data tutto quello che c'è dopo il match
       unprocessed_data = match_data.post_match
     end
+    
+    # Aggiungiamo il log non parsato
+    event.set("RAW_MESSAGE", data)
 
     # Portiamo in uscita l'evento
     yield event
